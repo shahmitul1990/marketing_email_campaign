@@ -1,0 +1,227 @@
+---
+title: "Marketing Email Campaign"
+author: "Mitul Shah"
+date: "8/9/2017"
+output: pdf_document
+---
+
+# Loading the data
+
+```{r}
+
+## Email_table
+email_table <- read.csv("email/email_table.csv")
+
+## Emails which were opened
+email_opened_table <- read.csv("email/email_opened_table.csv")
+
+## Emails which were clicked
+link_clicked_table <- read.csv("email/link_clicked_table.csv")
+
+## Adding new column to emails opened and clicked tables which is equal to 1
+email_opened_table$opened <- 1
+link_clicked_table$clicked <- 1
+
+## Merge email table with emails opened
+data <- merge(email_table, email_opened_table, by = "email_id", all.x = T)
+
+## Setting not opened emails to 0 
+data$opened <- as.character(data$opened)
+data$opened[is.na(data$opened)] = "0"
+
+## Merge clicked emails
+data <- merge(data, link_clicked_table, by = "email_id", all.x = T)
+
+## Setting not clicked emails to 0 
+data$clicked <- as.character(data$clicked)
+data$clicked[is.na(data$clicked)] = "0"
+
+
+```
+
+
+# Checking Data Quality
+
+```{r}
+
+## Are there duplicates?
+length(unique(data$email_id)) == length(data$email_id) ## looks good!
+
+## Checking whether there were any emails where the user clicked the link without opening it! 
+nrow(data[which(data$opened == 0 & data$clicked == 1), ]) ## this is an issue
+
+```
+
+Let's remove these 50 observations from the data. 
+
+```{r}
+
+## Loading dplyr
+library(dplyr)
+
+## Removing the emails where the link was clicked without opening the email
+data <- filter(data, (opened == 0 & clicked == 0) | (opened == 1 & clicked == 1) | (opened == 1 & clicked == 0))
+
+## 
+str(data)
+
+summary(data)
+```
+
+
+# What percentage of users opened the email and what percentage clicked on the link within the email ?
+
+```{r}
+
+## Percentage of users who opened the email
+(nrow(subset(data, data$opened == 1)) / nrow(data)) * 100
+
+## Percentage of users who clicked on the link within the email
+(nrow(subset(data, data$clicked == 1)) / nrow(data)) * 100
+
+```
+
+
+# Exploratory Data Analysis
+
+```{r}
+
+## Loading ggplot2
+library(ggplot2)
+
+## Changing the mode of opened and clicked to integer
+data$opened <- as.integer(data$opened)
+data$clicked <- as.integer(data$clicked)
+
+## Data by email text
+data_by_email_text <- data %>% group_by(email_text) %>% summarise(mean_opened = mean(opened), mean_clicked = mean(clicked))
+
+## Looking at it!
+data_by_email_text
+
+## Data by email version
+data_by_email_version <- data %>% group_by(email_version) %>% summarise(mean_opened = mean(opened), mean_clicked = mean(clicked))
+
+## Looking at it!
+data_by_email_version
+
+## Data by day and hour
+data_by_day_and_hour <- data %>% group_by(weekday, hour) %>% summarise(mean_opened = mean(opened), mean_clicked = mean(clicked))
+
+## Changing the order of days
+data_by_day_and_hour$weekday <- factor(data_by_day_and_hour$weekday, ordered = TRUE, levels=c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
+
+## Visualizing the rate of opening an email by Heatmap
+ggplot(data_by_day_and_hour, aes(x = hour, y = weekday)) + geom_tile(aes(fill = mean_opened)) + scale_fill_gradient(name = "Rate of opening the Email", low = "white", high = "red") + ggtitle("Rate of opening the Email by day and hour")
+
+## Visualizing the rate of clicking the link in an email by Heatmap
+ggplot(data_by_day_and_hour, aes(x = hour, y = weekday)) + geom_tile(aes(fill = mean_clicked)) + scale_fill_gradient(name = "Rate of clicking the link in Email", low = "white", high = "red") + ggtitle("Rate of clicking the link in Email by day and hour")
+
+## Data by country
+data_by_country <- data %>% group_by(user_country) %>% summarise(mean_opened = mean(opened), mean_clicked = mean(clicked))
+
+## Looking at it!
+data_by_country
+
+## Data by number of user past purchases
+data_by_user_past_purchases <- data %>% group_by(user_past_purchases) %>% summarise(mean_opened = mean(opened), mean_clicked = mean(clicked))
+
+## Visualizing it!
+ggplot(data_by_user_past_purchases, aes(user_past_purchases, mean_clicked, col = "red")) + geom_line() + geom_line(data = data_by_user_past_purchases, aes(user_past_purchases, mean_opened, col = "blue")) + labs(title = "Rate of Opening Emails and Clicking in the link by # of purchases", x = "Number of purchases", y = "Rate", color = "") + scale_color_manual(labels = c("Opening Rate", "Clicking Rate"), values = c("blue", "red"))
+
+```
+
+
+# The VP of marketing thinks that it is stupid to send emails to a random subset and in a random way. Based on all the information you have about the emails that were sent, can you build a model to optimize in future email campaigns to maximize the probability of users clicking on the link inside the email?
+
+In order to optimize this, let's only consider those emails which get opened first. 
+
+
+```{r}
+      
+## Loading rpart            
+library(rpart)
+
+## Opened Emails
+opened_emails <- filter(data, opened == 1)
+
+## Decision tree to predict clicked
+tree = rpart(clicked ~ ., data = opened_emails, control = rpart.control(minbucket = nrow(data)/100, maxdepth = 2))
+
+## Looking at the tree
+tree
+
+```
+
+
+# By how much do you think your model would improve click through rate (defined as # of users who click on the link / total users who received the email). How would you test that?
+
+```{r}
+
+## Subset by # of user past purchases >=6
+users_with_more_purchases <- filter(data, user_past_purchases >= 6)
+
+## Expected click through rate (CTR)
+(nrow(subset(users_with_more_purchases, users_with_more_purchases$clicked == 1)) / nrow(users_with_more_purchases)) * 100
+
+## Expected Percentage increase
+(4.05 - 2.07) / 2.07
+
+## t-test 
+t.test(data$clicked, users_with_more_purchases$clicked)
+
+
+```
+
+By sending emails to users with atleast 6 purchases, we can almost double the click through rate. We can test this by a t-test. 
+
+# Did you find any interesting pattern on how the email campaign performed for different segments of users? Explain.
+
+```{r}
+
+## Mean of rate of clicking by country, given the user opened the email
+clicked_by_country <- opened_emails %>% group_by(user_country) %>% summarise(mean_clicked = mean(clicked))
+
+## Merge the data by country 
+dat <- merge(data_by_country, clicked_by_country, by = "user_country")
+
+## Renaming columns of dat
+colnames(dat)[3:4] <- c("mean_clicked", "mean_clicked_given_opened") 
+
+## Looking at dat
+dat
+
+```
+
+I notice that the users of countries Spain and France have almost equal chances of clicking on the link in the email as that of US and UK users, once they open it. But due to some reason, they have a very low probability of opening the email as compared to US and UK users. This needs to be investigated further!
+
+# Other Interesting Results
+
+1. Short and personalized emails were more effective than long and generic emails.
+
+2. Most users are opening their email in the weekdays in the morning time (9 am to 12 pm). But we also see that many people opened the email on 24th hour of Tuesday. 
+
+3. The users are clicking on the link in the email mostly on Tuesday, Saturday or Sunday night. This information can be used in order to decide when the emails should be sent!
+
+```{r}
+
+## Load the library dplyr
+library(dplyr)
+
+## Create data for each segment having CTR and number of users for that segment
+data_for_each_segment <- data %>% group_by(email_text, email_version, hour, weekday, user_country, user_past_purchases) %>% summarise(click_through_rate = mean(clicked), number_of_users = n_distinct(email_id)) %>% arrange(user_country, user_past_purchases)
+
+## CTR
+weighted.mean(data_for_each_segment$click_through_rate, data_for_each_segment$number_of_users / sum(data_for_each_segment$number_of_users))
+
+## CTR (same as above; just confirming whether I am doing it correctly)
+(nrow(subset(data, data$clicked == 1)) / nrow(data)) 
+
+## Estimating maxiumum CTR for each segment (Grouped by country and past purchases as they can't be changed)
+data_to_estimate_max_ctr <- data_for_each_segment %>% group_by(user_country, user_past_purchases) %>% summarise(max_ctr = max(click_through_rate), number_of_users = sum(number_of_users))
+
+## Maximum CTR expected
+weighted.mean(data_to_estimate_max_ctr$max_ctr, data_to_estimate_max_ctr$number_of_users / sum(data_to_estimate_max_ctr$number_of_users))
+
+```
+
